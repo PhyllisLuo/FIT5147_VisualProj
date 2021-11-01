@@ -1,0 +1,243 @@
+---
+title: "plot trial"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(shiny)
+library(tidyverse)
+library(readxl)
+library(sf)
+library(leaflet)
+library(ggthemes)
+library(geosphere)
+library(plotly)
+library(DT)
+library(kableExtra)
+```
+
+```{r read-data}
+#LGA intro
+intro_lga <- read_excel("data/population/LGA_intro.xlsx")
+
+#population
+population_lga <- read_excel("data/population/abs_ERP_2020.xlsx",
+                             sheet = "LGA") %>% 
+  mutate(`LGA code` = as.character(`LGA code`))
+
+population_poa <-
+  read_excel("data/population/abs_ERP_2020.xlsx",
+                             sheet = "POA")
+#boundary data
+vic_lga <- read_sf("data/boundary_vic/AD_LGA_AREA_POLYGON.shp") %>% 
+  filter(STATE == "VIC")
+vic_poa <- read_sf("data/boundary_vic/POSTCODE_POLYGON.shp") %>% 
+  filter(POSTCODE %in% c(population_poa$POAcode))
+
+#rental property
+rental_prop <- read_excel("data/rentalprop_vic.xlsx") %>% 
+  mutate(room = as.character(room),
+         postalCode = as.character(postalCode),
+         LGA = as.character(LGAcode)) %>% 
+  filter(room != 0)
+  
+```
+
+
+# Tab 1 - Project Introduction
+
+# Tab 2 - Know about Vicotria and Monash 
+
+## LeafletProxy
+
+```{r leaflet-lga-tab2}
+campus_center <- paste(sep = "<br/>",
+  "<b>Monash University</b>",
+  "Clayton Campus Center")
+
+leaflet <- leaflet() %>%
+  addTiles() %>%  # Add default OpenStreetMap map tiles
+  setView(lng=145.133957, lat=-37.907803, zoom = 10) %>%
+  addPopups(lng=145.133957, lat=-37.907803, 
+            campus_center,
+            options = popupOptions(closeButton = FALSE)) 
+leaflet  # Print the map
+```
+
+## LGA info
+
+```{r intro}
+intro_lga %>% 
+  filter(`Local Government Area` == "Alpine (S)") %>%
+  mutate(`LGA code` = as.character(`LGA code`),
+         `Estimated Resident Population 2020` =
+           as.character(`Estimated Resident Population 2020`),
+         `Area (km2)` =  as.character(`Area (km2)`),
+         `Density (persons/km2)` = 
+           as.character(`Density (persons/km2)`)) %>% 
+  pivot_longer(
+    cols = 1:6,
+    names_to = "Info Category",
+    values_to = "Info Details"
+  ) %>% 
+  kableExtra::kbl() %>% 
+  kable_paper("hover", full_width = F)
+
+```
+
+
+## Age
+
+```{r age-lga-tab2}
+p_pop <- population_lga %>% 
+  filter(`LGA name` == "Alpine (S)") %>% 
+  pivot_longer(cols = -c(`S/T code`, `S/T name`, `LGA code`, `LGA name`),
+               names_to = "Age",
+               values_to = "Population") %>% 
+  filter(Age != "Total") %>% 
+  ggplot() +
+  geom_col(aes(x = Age,
+               y = Population),
+           fill = "steelblue") +
+  coord_flip() +
+  theme(
+    # get rid of the 'major' y grid lines
+    panel.grid.major.y = element_blank()) 
+
+ggplotly(p_pop)
+```
+
+# Tab 3 - Property Qty
+
+## Map
+
+```{r filter-lga-tab3}
+monash_poa_15km <- population_poa %>% 
+  mutate(dist_monash =
+           distHaversine(
+             matrix(c(lng_poa,lat_poa), 
+                       ncol = 2),
+                matrix(c(145.1349,
+                        -37.91054), 
+                       ncol = 2))/1000) %>% 
+  filter(dist_monash <= 15) %>% 
+  dplyr::select(3:5, 25:27) %>% 
+  mutate(`LGA code` = as.character(`LGA code`))
+
+vic_lga_15km <- vic_lga %>% 
+  mutate(`LGA code` = ABSLGACODE) %>% 
+  left_join(monash_poa_15km) %>% 
+  filter(!is.na(`LGA name`))
+
+vic_lga_name <- vic_lga %>% 
+  mutate(`LGA code` = ABSLGACODE) %>% 
+  left_join(population_lga) %>% 
+  filter(!is.na(`LGA name`)) %>% 
+  select(1:15, `LGA name`)
+```
+
+
+```{r map-tab2}
+p_map <- vic_lga %>% 
+  ggplot(aes(text = paste("LGA:", NAME))) +
+  geom_sf(fill = "lightblue2", colour = "white") + 
+  geom_sf(data = vic_lga_15km,
+          fill = "steelblue", colour = "white") +
+  geom_sf(data = vic_lga_15km,
+          fill = "lightsalmon", colour = "white") +
+  geom_point(x = 145.133957, y = -37.907803, 
+             color = "red", size = 0.8)
+  
+ggplotly(p_map)
+```
+## Map2
+
+```{r map-15km-tab3}
+p_15km <-vic_lga %>%
+  ggplot(aes(text = paste("LGA:", NAME))) +
+  geom_sf(data = vic_lga_15km,
+          fill = "steelblue", colour = "white") +
+  geom_sf(data = vic_lga_15km,
+          fill = "lightsalmon", colour = "white") +
+  geom_point(x = 145.133957, y = -37.907803, 
+             color = "red", size = 0.8) +
+  theme_map()
+
+ggplotly(p_15km)
+```
+
+## Property Qty
+
+```{r qty-lga-tab3}
+p_qty <- rental_prop %>% 
+  filter(LGAname == "Melbourne (C)") %>%
+  group_by(type, room) %>% 
+  count()%>% 
+  rename(`Number of rooms` = room,
+         Quantity = n,
+         Type = type) %>% 
+  ggplot(aes(x = Type,
+               y = Quantity,
+               fill = `Number of rooms`)) +
+  geom_col(position = "stack") +
+  labs(x = "Property Type")
+
+ggplotly(p_qty)
+```
+
+# Tab 4 - Property Price
+
+## Price
+
+```{r price-tab4}
+p_price <- rental_prop %>% 
+  filter(LGAname == "Melbourne (C)") %>%
+  group_by(type, room) %>% 
+  summarise(Quantity = n(),
+            `Avg price` = round(mean(price), 0)) %>% 
+  mutate(room = as.numeric(room),
+         `Avg price per rooms` = round(`Avg price` / room, 0)) %>%
+  mutate(room = as.character(room)) %>% 
+  rename(Type = type,
+         `Number of rooms` = room) %>%
+  ggplot(aes(x = `Avg price`,
+             y = Quantity,
+             size = `Avg price per rooms`,
+             color = `Number of rooms`)) +
+  geom_point(alpha=0.5) +
+  scale_size_continuous(guide = 'none') +
+  facet_wrap(~Type, nrow = 1)
+
+ggplotly(p_price)
+```
+
+
+## Avg Price
+
+## Map
+
+## Kable - detail price list
+
+```{r kable-tab4}
+rental_prop_dt <- rental_prop %>% 
+  select(2, 5:9, 1)  
+
+DT::datatable(rental_prop_dt,
+              filter = 'top',
+              options = 
+                list(columnDefs = 
+                       list(list(className = 'dt-right', targets = 3:5))),
+              colnames =
+                c('Local Government Area',
+                  'Postcode',
+                  'Rooms',
+                  'Bathrooms',
+                  'Carpark',
+                  'Property Type',
+                  'Price'))
+  
+```
+
